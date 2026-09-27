@@ -6,7 +6,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 import boto3
 import xmltodict
@@ -14,6 +14,9 @@ import xmltodict
 TOPIC_ARN_PATTERN = re.compile(
     r"arn:aws[a-z-]*:sns:[a-z0-9-]+:\d{12}:[A-Za-z0-9_-]{1,256}"
 )
+CHANNEL_ID_PATTERN = re.compile(r"UC[A-Za-z0-9_-]{22}")
+FEED_URL = "https://www.youtube.com/xml/feeds/videos.xml?channel_id="
+FEED_URL_PATTERN = re.compile(re.escape(FEED_URL) + f"({CHANNEL_ID_PATTERN.pattern})")
 
 logger = logging.getLogger()
 
@@ -80,35 +83,29 @@ def load_config(env=os.environ, ssm=None) -> Config:
     )
 
 
-CONFIG = load_config()
+SSM = boto3.client("ssm")
+CONFIG = load_config(ssm=SSM)
 logger.setLevel(CONFIG.log_level)
 
 
-def lambda_handler(event, context):
-    body = raw_body(event)
-    signature = (event.get("headers") or {}).get("x-hub-signature")
-    if not valid_signature(body, signature):
-        logger.warning(
-            "Discarding notification with %s signature",
-            "missing" if signature is None else "invalid",
+def load_channel_ids() -> list[str]:
+    value = SSM.get_parameter(Name=CONFIG.channel_ids_param)["Parameter"]["Value"]
+    try:
+        channel_ids = json.loads(value)
+    except json.JSONDecodeError:
+        channel_ids = None
+    if not isinstance(channel_ids, list) or not all(
+        isinstance(c, str) and CHANNEL_ID_PATTERN.fullmatch(c) for c in channel_ids
+    ):
+        raise ConfigError(
+            f"{CONFIG.channel_ids_param} is not a JSON array of channel IDs"
         )
-        return response(202)
-    xml = xmltodict.parse(body)
-    info = extract_info(xml)
-    write_to_topic(info)
-    return {"status": 200, "info": json.dumps(info)}
+    return channel_ids
 
 
 def raw_body(event) -> bytes:
     body = event.get("body") or ""
     return base64.b64decode(body) if event.get("isBase64Encoded") else body.encode()
-
-
-def valid_signature(body: bytes, signature: str | None) -> bool:
-    if signature is None:
-        return False
-    digest = hmac.new(CONFIG.hub_secret.encode(), body, hashlib.sha1).hexdigest()
-    return hmac.compare_digest(f"sha1={digest}".encode(), signature.encode())
 
 
 def response(status, body=""):
@@ -117,6 +114,35 @@ def response(status, body=""):
         "headers": {"Content-Type": "text/plain"},
         "body": body,
     }
+
+
+def verify_subscription(event):
+    params = dict(parse_qsl(event.get("rawQueryString", "")))
+    mode = params.get("hub.mode")
+    match = FEED_URL_PATTERN.fullmatch(params.get("hub.topic", ""))
+    channel_id = match and match[1]
+    if (
+        params.get("hub.challenge")
+        and channel_id
+        and mode in ("subscribe", "unsubscribe")
+        and (channel_id in load_channel_ids()) == (mode == "subscribe")
+    ):
+        logger.info(
+            "Accepted %s for %s, lease %s",
+            mode,
+            channel_id,
+            params.get("hub.lease_seconds"),
+        )
+        return response(200, params["hub.challenge"])
+    logger.warning("Refused %r for %s", mode, channel_id)
+    return response(404)
+
+
+def valid_signature(body: bytes, signature: str | None) -> bool:
+    if signature is None:
+        return False
+    digest = hmac.new(CONFIG.hub_secret.encode(), body, hashlib.sha1).hexdigest()
+    return hmac.compare_digest(f"sha1={digest}".encode(), signature.encode())
 
 
 def extract_info(xml):
@@ -135,3 +161,22 @@ def extract_info(xml):
 
 def write_to_topic(info):
     boto3.client("sns").publish(TopicArn=CONFIG.topic_arn, Message=json.dumps(info))
+
+
+def lambda_handler(event, context):
+    body = raw_body(event)
+    signature = (event.get("headers") or {}).get("x-hub-signature")
+    if not valid_signature(body, signature):
+        logger.warning(
+            "Discarding notification with %s signature",
+            "missing" if signature is None else "invalid",
+        )
+        return response(202)
+
+    if event.get("requestContext", {}).get("http", {}).get("method") == "GET":
+        return verify_subscription(event)
+
+    xml = xmltodict.parse(body)
+    info = extract_info(xml)
+    write_to_topic(info)
+    return {"status": 200, "info": json.dumps(info)}
