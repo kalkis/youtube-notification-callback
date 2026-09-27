@@ -5,8 +5,9 @@ import json
 import logging
 import os
 import re
+import urllib.request
 from dataclasses import dataclass, field
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse
 from xml.parsers.expat import ExpatError
 
 import boto3
@@ -27,6 +28,15 @@ logger = logging.getLogger()
 
 class ConfigError(Exception):
     pass
+
+
+class HubError(Exception):
+    pass
+
+
+def https_url(url) -> bool:
+    parsed = urlparse(url)
+    return parsed.scheme == "https" and bool(parsed.netloc)
 
 
 @dataclass(frozen=True)
@@ -55,8 +65,7 @@ def load_config(env=os.environ, ssm=None) -> Config:
     callback_url_param = required("CALLBACK_URL_PARAM")
 
     hub_url = env.get("HUB_URL", "https://pubsubhubbub.appspot.com/subscribe")
-    parsed = urlparse(hub_url)
-    if parsed.scheme != "https" or not parsed.netloc:
+    if not https_url(hub_url):
         raise ConfigError("HUB_URL must be an https URL")
 
     try:
@@ -215,6 +224,91 @@ def build_messages(feed: dict, channel_ids: list[str]) -> list[dict]:
 
 def write_to_topic(message):
     SNS.publish(TopicArn=CONFIG.topic_arn, Message=json.dumps(message))
+
+
+def save_channel_ids(channel_ids):
+    SSM.put_parameter(
+        Name=CONFIG.channel_ids_param,
+        Value=json.dumps(channel_ids),
+        Type="String",
+        Overwrite=True,
+    )
+
+
+def load_callback_url() -> str:
+    value = SSM.get_parameter(Name=CONFIG.callback_url_param)["Parameter"]["Value"]
+    if not https_url(value):
+        raise ConfigError(f"{CONFIG.callback_url_param} is not an https URL")
+    return value
+
+
+def hub_request(mode, channel_id, callback_url):
+    form = {
+        "hub.mode": mode,
+        "hub.topic": FEED_URL + channel_id,
+        "hub.callback": callback_url,
+        "hub.verify": "async",
+    }
+    if mode == "subscribe":
+        form |= {
+            "hub.lease_seconds": CONFIG.lease_seconds,
+            "hub.secret": CONFIG.hub_secret,
+        }
+    request = urllib.request.Request(CONFIG.hub_url, data=urlencode(form).encode())
+    try:
+        with urllib.request.urlopen(request, timeout=5) as reply:
+            status = reply.status
+    except OSError as e:
+        raise HubError(f"{mode} for {channel_id} failed: {e}") from e
+    if status != 202:
+        raise HubError(f"{mode} for {channel_id} got status {status}")
+
+
+def resubscribe(event):
+    channel_ids = load_channel_ids()
+    callback_url = load_callback_url()
+    failed = []
+    for channel_id in channel_ids:
+        try:
+            hub_request("subscribe", channel_id, callback_url)
+        except HubError as e:
+            logger.error("Resubscribe failed: %s", e)
+            failed.append(channel_id)
+        else:
+            logger.info("Resubscribed %s", channel_id)
+    if failed:
+        raise HubError(f"resubscribe failed for {', '.join(failed)}")
+    return {"channel_ids": channel_ids}
+
+
+def change_subscription(event, mode):
+    channel_id = event.get("channel_id")
+    if not isinstance(channel_id, str) or not CHANNEL_ID_PATTERN.fullmatch(channel_id):
+        raise ValueError(f"invalid channel_id {channel_id!r}")
+    channel_ids = load_channel_ids()
+    callback_url = load_callback_url()
+    wanted = mode == "subscribe"
+    if (channel_id in channel_ids) != wanted:
+        channel_ids = (
+            channel_ids + [channel_id]
+            if wanted
+            else [c for c in channel_ids if c != channel_id]
+        )
+        save_channel_ids(channel_ids)
+        logger.info(
+            "Saved channel list %s %s", "with" if wanted else "without", channel_id
+        )
+    hub_request(mode, channel_id, callback_url)
+    logger.info("Sent %s for %s", mode, channel_id)
+    return {"channel_ids": channel_ids}
+
+
+def subscribe(event):
+    return change_subscription(event, "subscribe")
+
+
+def unsubscribe(event):
+    return change_subscription(event, "unsubscribe")
 
 
 def lambda_handler(event, context):
