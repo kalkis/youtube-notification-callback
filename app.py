@@ -164,6 +164,9 @@ def write_to_topic(info):
 
 
 def lambda_handler(event, context):
+    if event.get("requestContext", {}).get("http", {}).get("method") == "GET":
+        return verify_subscription(event)
+
     body = raw_body(event)
     signature = (event.get("headers") or {}).get("x-hub-signature")
     if not valid_signature(body, signature):
@@ -172,9 +175,6 @@ def lambda_handler(event, context):
             "missing" if signature is None else "invalid",
         )
         return response(202)
-
-    if event.get("requestContext", {}).get("http", {}).get("method") == "GET":
-        return verify_subscription(event)
 
     xml = xmltodict.parse(body)
     info = extract_info(xml)
