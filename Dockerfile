@@ -1,16 +1,11 @@
-ARG PYTHON_VERSION=3.9
+FROM public.ecr.aws/lambda/python:3.13
 
-# contains AWS Lambda runtime
-FROM public.ecr.aws/lambda/python:${PYTHON_VERSION}
+COPY --from=ghcr.io/astral-sh/uv:0.12.19 /uv /bin/uv
 
-ARG TOPIC_NAME=youtube-pubsubhubbub
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
+    && uv pip install --no-cache -r /tmp/requirements.txt --target "${LAMBDA_TASK_ROOT}"
 
-COPY app.py ${LAMBDA_TASK_ROOT}
-COPY requirements.txt  .
+COPY *.py ${LAMBDA_TASK_ROOT}/
 
-ENV TOPIC_NAME=$TOPIC_NAME
-
-RUN  pip3 install -r requirements.txt --target "${LAMBDA_TASK_ROOT}"
-
-CMD [ "app.lambda_handler" ]
-
+CMD ["app.lambda_handler"]
