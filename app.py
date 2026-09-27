@@ -11,6 +11,7 @@ from xml.parsers.expat import ExpatError
 
 import boto3
 import xmltodict
+from botocore.exceptions import BotoCoreError, ClientError
 
 TOPIC_ARN_PATTERN = re.compile(
     r"arn:aws[a-z-]*:sns:[a-z0-9-]+:\d{12}:[A-Za-z0-9_-]{1,256}"
@@ -87,6 +88,7 @@ def load_config(env=os.environ, ssm=None) -> Config:
 
 
 SSM = boto3.client("ssm")
+SNS = boto3.client("sns")
 CONFIG = load_config(ssm=SSM)
 logger.setLevel(CONFIG.log_level)
 
@@ -212,7 +214,7 @@ def build_messages(feed: dict, channel_ids: list[str]) -> list[dict]:
 
 
 def write_to_topic(message):
-    boto3.client("sns").publish(TopicArn=CONFIG.topic_arn, Message=json.dumps(message))
+    SNS.publish(TopicArn=CONFIG.topic_arn, Message=json.dumps(message))
 
 
 def lambda_handler(event, context):
@@ -235,5 +237,15 @@ def lambda_handler(event, context):
         return response(400)
 
     for message in build_messages(feed, load_channel_ids()):
-        write_to_topic(message)
+        try:
+            write_to_topic(message)
+        except (BotoCoreError, ClientError) as e:
+            logger.error(
+                "Failed to publish %s of %s: %s",
+                message["event"],
+                message["video_id"],
+                e,
+            )
+            return response(500)
+        logger.info("Published %s of %s", message["event"], message["video_id"])
     return response(204)
