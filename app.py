@@ -1,3 +1,6 @@
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -82,10 +85,38 @@ logger.setLevel(CONFIG.log_level)
 
 
 def lambda_handler(event, context):
-    xml = xmltodict.parse(event["body"])
+    body = raw_body(event)
+    signature = (event.get("headers") or {}).get("x-hub-signature")
+    if not valid_signature(body, signature):
+        logger.warning(
+            "Discarding notification with %s signature",
+            "missing" if signature is None else "invalid",
+        )
+        return response(202)
+    xml = xmltodict.parse(body)
     info = extract_info(xml)
     write_to_topic(info)
     return {"status": 200, "info": json.dumps(info)}
+
+
+def raw_body(event) -> bytes:
+    body = event.get("body") or ""
+    return base64.b64decode(body) if event.get("isBase64Encoded") else body.encode()
+
+
+def valid_signature(body: bytes, signature: str | None) -> bool:
+    if signature is None:
+        return False
+    digest = hmac.new(CONFIG.hub_secret.encode(), body, hashlib.sha1).hexdigest()
+    return hmac.compare_digest(f"sha1={digest}".encode(), signature.encode())
+
+
+def response(status, body=""):
+    return {
+        "statusCode": status,
+        "headers": {"Content-Type": "text/plain"},
+        "body": body,
+    }
 
 
 def extract_info(xml):
