@@ -85,3 +85,4 @@ def load_config(env=os.environ, ssm=None) -> Config:
 SSM = boto3.client("ssm")
 CONFIG = load_config(ssm=SSM)
 logger.setLevel(CONFIG.log_level)
+logging.getLogger("botocore").setLevel(max(logger.level, logging.INFO))
