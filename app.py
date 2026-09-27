@@ -7,6 +7,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, urlparse
+from xml.parsers.expat import ExpatError
 
 import boto3
 import xmltodict
@@ -15,6 +16,8 @@ TOPIC_ARN_PATTERN = re.compile(
     r"arn:aws[a-z-]*:sns:[a-z0-9-]+:\d{12}:[A-Za-z0-9_-]{1,256}"
 )
 CHANNEL_ID_PATTERN = re.compile(r"UC[A-Za-z0-9_-]{22}")
+VIDEO_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{11}")
+CHANNEL_URL = "https://www.youtube.com/channel/"
 FEED_URL = "https://www.youtube.com/xml/feeds/videos.xml?channel_id="
 FEED_URL_PATTERN = re.compile(re.escape(FEED_URL) + f"({CHANNEL_ID_PATTERN.pattern})")
 
@@ -145,22 +148,71 @@ def valid_signature(body: bytes, signature: str | None) -> bool:
     return hmac.compare_digest(f"sha1={digest}".encode(), signature.encode())
 
 
-def extract_info(xml):
-    info = xml["feed"]["entry"]
-    return {
-        "channel_id": info["yt:channelId"],
-        "channel_name": info["author"]["name"],
-        "channel_link": info["author"]["uri"],
-        "video_name": info["title"],
-        "video_id": info["yt:videoId"],
-        "youtube_link": info["link"]["@href"],
-        "published": info["published"],
-        "updated": info["updated"],
-    }
+def parse_feed(body: bytes) -> dict:
+    doc = xmltodict.parse(
+        body, disable_entities=True, force_list=("entry", "at:deleted-entry")
+    )
+    if "feed" not in doc or not isinstance(doc["feed"], dict | None):
+        raise ValueError("root element is not an Atom feed")
+    return doc["feed"] or {}
 
 
-def write_to_topic(info):
-    boto3.client("sns").publish(TopicArn=CONFIG.topic_arn, Message=json.dumps(info))
+def field(node, *path) -> str | None:
+    for key in path:
+        node = node.get(key) if isinstance(node, dict) else None
+    return node if isinstance(node, str) else None
+
+
+def build_messages(feed: dict, channel_ids: list[str]) -> list[dict]:
+    candidates = [
+        {
+            "event": "upsert",
+            "video_id": field(entry, "yt:videoId"),
+            "channel_id": field(entry, "yt:channelId"),
+            "title": field(entry, "title"),
+            "published": field(entry, "published"),
+            "updated": field(entry, "updated"),
+        }
+        for entry in feed.get("entry", [])
+    ] + [
+        {
+            "event": "delete",
+            "video_id": (field(entry, "@ref") or "").removeprefix("yt:video:"),
+            "channel_id": (field(entry, "at:by", "uri") or "").removeprefix(
+                CHANNEL_URL
+            ),
+            "deleted_at": field(entry, "@when"),
+        }
+        for entry in feed.get("at:deleted-entry", [])
+    ]
+    messages = []
+    for candidate in candidates:
+        event = candidate["event"]
+        video_id, channel_id = (
+            candidate["video_id"] or "",
+            candidate["channel_id"] or "",
+        )
+        if not (
+            VIDEO_ID_PATTERN.fullmatch(video_id)
+            and CHANNEL_ID_PATTERN.fullmatch(channel_id)
+        ):
+            logger.warning(
+                "Skipping %s with invalid IDs %r %r", event, video_id, channel_id
+            )
+        elif channel_id not in channel_ids:
+            logger.warning(
+                "Skipping %s of %s from unlisted %s", event, video_id, channel_id
+            )
+        else:
+            messages.append(
+                {"schema_version": 1, "source": "pubsubhubbub"}
+                | {k: v for k, v in candidate.items() if v is not None}
+            )
+    return messages
+
+
+def write_to_topic(message):
+    boto3.client("sns").publish(TopicArn=CONFIG.topic_arn, Message=json.dumps(message))
 
 
 def lambda_handler(event, context):
@@ -176,7 +228,12 @@ def lambda_handler(event, context):
         )
         return response(202)
 
-    xml = xmltodict.parse(body)
-    info = extract_info(xml)
-    write_to_topic(info)
-    return {"status": 200, "info": json.dumps(info)}
+    try:
+        feed = parse_feed(body)
+    except (ExpatError, ValueError) as e:
+        logger.warning("Rejecting unparseable notification: %s", e)
+        return response(400)
+
+    for message in build_messages(feed, load_channel_ids()):
+        write_to_topic(message)
+    return response(204)
