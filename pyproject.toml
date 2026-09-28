@@ -22,6 +22,9 @@ dev = [
 [tool.uv]
 package = false
 
+[tool.mypy]
+files = ["*.py", "tests"]
+
 [[tool.mypy.overrides]]
 module = ["boto3", "botocore.*"]
 ignore_missing_imports = true
