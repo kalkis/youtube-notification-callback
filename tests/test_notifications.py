@@ -20,7 +20,7 @@ import notifications
 NEW_ENTRY = (FIXTURES / "new_entry.xml").read_bytes()
 DELETED_ENTRY = (FIXTURES / "deleted_entry.xml").read_bytes()
 MALFORMED = (FIXTURES / "malformed.xml").read_bytes()
-TITLE = '"can you just.......text me?"'
+TITLE = '"Carrying a sofa up six flights of stairs"'
 
 
 def handle(event):
@@ -106,11 +106,11 @@ def test_new_entry_publishes_upsert():
             "schema_version": 1,
             "source": "pubsubhubbub",
             "event": "upsert",
-            "video_id": "-AwCEM5K-Ec",
+            "video_id": "wCAM-K5E-Ec",
             "channel_id": CHANNEL_ID,
             "title": TITLE,
-            "published": "2026-09-22T00:00:14+00:00",
-            "updated": "2026-09-22T17:37:38.214885301+00:00",
+            "published": "2026-09-22T00:00:08+00:00",
+            "updated": "2026-09-22T17:37:43.214885301+00:00",
         }
     ]
 
@@ -122,7 +122,7 @@ def test_deleted_entry_publishes_delete():
             "schema_version": 1,
             "source": "pubsubhubbub",
             "event": "delete",
-            "video_id": "NJGHBuZzHsI",
+            "video_id": "sNJBHzZGHuI",
             "channel_id": CHANNEL_ID,
             "deleted_at": "2026-09-25T08:00:00.583719+00:00",
         }
@@ -202,7 +202,7 @@ def test_logs_never_contain_titles(caplog):
     )
     handle(http_event("POST", body=NEW_ENTRY, headers={"x-hub-signature": "sha1=0"}))
     assert caplog.records
-    assert "text me" not in caplog.text
+    assert "sofa" not in caplog.text
 
 
 def test_unsupported_method_returns_400():

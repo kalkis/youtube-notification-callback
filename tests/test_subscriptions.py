@@ -122,7 +122,7 @@ def test_invalid_channel_id_changes_nothing(hub, action, fields):
 
 @pytest.mark.parametrize(
     "value",
-    ["not json", '{"a": 1}', '"UCPdaxSov0mgwh77JvjQO2jQ"', '["UCshort"]', "[1]"],
+    ["not json", '{"a": 1}', '"UCdj0goPwahmOx77QJvvj2SQ"', '["UCshort"]', "[1]"],
 )
 @pytest.mark.parametrize(
     "action", [("resubscribe", {}), ("subscribe", {"channel_id": OTHER_CHANNEL_ID})]

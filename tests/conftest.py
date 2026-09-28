@@ -12,7 +12,7 @@ import boto3
 import pytest
 from moto import mock_aws
 
-CHANNEL_ID = "UCPdaxSov0mgwh77JvjQO2jQ"
+CHANNEL_ID = "UCdj0goPwahmOx77QJvvj2SQ"
 OTHER_CHANNEL_ID = "UCuAXFkgsw1L7xaCfnd5JJOw"
 HUB_SECRET = "test-hub-secret"
 CALLBACK_URL = "https://abc123.lambda-url.eu-west-1.on.aws/"
