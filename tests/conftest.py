@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qsl, urlencode
@@ -48,11 +49,11 @@ os.environ |= {
 }
 
 
-def pytest_unconfigure(config):
+def pytest_unconfigure(config: pytest.Config) -> None:
     MOCK.stop()
 
 
-def set_channel_ids(value):
+def set_channel_ids(value: str | list[str]) -> None:
     SSM.put_parameter(
         Name="/test/channel-ids",
         Value=value if isinstance(value, str) else json.dumps(value),
@@ -61,16 +62,22 @@ def set_channel_ids(value):
     )
 
 
-def channel_ids():
+def channel_ids() -> list[str]:
     return json.loads(SSM.get_parameter(Name="/test/channel-ids")["Parameter"]["Value"])
 
 
-def published():
+def published() -> list[dict]:
     messages = SQS.receive_message(QueueUrl=QUEUE_URL, MaxNumberOfMessages=10)
     return [json.loads(m["Body"]) for m in messages.get("Messages", [])]
 
 
-def http_event(method, query=None, body=b"", headers=None, encoded=False):
+def http_event(
+    method: str,
+    query: dict[str, str] | None = None,
+    body: bytes = b"",
+    headers: dict[str, str] | None = None,
+    encoded: bool = False,
+) -> dict:
     return {
         "version": "2.0",
         "rawQueryString": urlencode(query or {}),
@@ -81,7 +88,9 @@ def http_event(method, query=None, body=b"", headers=None, encoded=False):
     }
 
 
-def verification_event(mode, channel_id, challenge="challenge-123"):
+def verification_event(
+    mode: str, channel_id: str, challenge: str = "challenge-123"
+) -> dict:
     return http_event(
         "GET",
         {
@@ -93,7 +102,7 @@ def verification_event(mode, channel_id, challenge="challenge-123"):
     )
 
 
-def signed_event(body: bytes, secret=HUB_SECRET, encoded=False):
+def signed_event(body: bytes, secret: str = HUB_SECRET, encoded: bool = False) -> dict:
     digest = hmac.new(secret.encode(), body, hashlib.sha1).hexdigest()
     return http_event(
         "POST",
@@ -106,14 +115,17 @@ def signed_event(body: bytes, secret=HUB_SECRET, encoded=False):
 class FakeHub:
     """Records hub requests and, like the real hub, verifies accepted ones."""
 
-    def __init__(self):
-        self.requests = []
-        self.verifications = []
-        self.results = {}
+    def __init__(self) -> None:
+        self.requests: list[dict[str, str]] = []
+        self.verifications: list[int] = []
+        self.results: dict[str, int | Exception] = {}
 
-    def urlopen(self, request, timeout):
+    def urlopen(
+        self, request: urllib.request.Request, timeout: float
+    ) -> contextlib.nullcontext[SimpleNamespace]:
         import app
 
+        assert isinstance(request.data, bytes)
         form = dict(parse_qsl(request.data.decode()))
         self.requests.append(form)
         channel_id = form["hub.topic"].removeprefix(FEED_URL)
@@ -127,7 +139,7 @@ class FakeHub:
 
 
 @pytest.fixture(autouse=True)
-def reset_state():
+def reset_state() -> None:
     set_channel_ids([CHANNEL_ID])
     SSM.put_parameter(
         Name="/test/callback-url", Value=CALLBACK_URL, Type="String", Overwrite=True
@@ -136,7 +148,7 @@ def reset_state():
 
 
 @pytest.fixture
-def hub(monkeypatch):
+def hub(monkeypatch: pytest.MonkeyPatch) -> FakeHub:
     fake = FakeHub()
     monkeypatch.setattr("urllib.request.urlopen", fake.urlopen)
     return fake

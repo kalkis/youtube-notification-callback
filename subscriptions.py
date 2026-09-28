@@ -27,7 +27,7 @@ def load_channel_ids() -> list[str]:
     return channel_ids
 
 
-def save_channel_ids(channel_ids):
+def save_channel_ids(channel_ids: list[str]) -> None:
     SSM.put_parameter(
         Name=CONFIG.channel_ids_param,
         Value=json.dumps(channel_ids),
@@ -43,8 +43,8 @@ def load_callback_url() -> str:
     return value
 
 
-def hub_request(mode, channel_id, callback_url):
-    form = {
+def hub_request(mode: str, channel_id: str, callback_url: str) -> None:
+    form: dict[str, str | int] = {
         "hub.mode": mode,
         "hub.topic": FEED_URL + channel_id,
         "hub.callback": callback_url,
@@ -65,7 +65,7 @@ def hub_request(mode, channel_id, callback_url):
         raise HubError(f"{mode} for {channel_id} got status {status}")
 
 
-def resubscribe(event):
+def resubscribe(event: dict) -> dict[str, list[str]]:
     channel_ids = load_channel_ids()
     callback_url = load_callback_url()
     failed = []
@@ -82,7 +82,7 @@ def resubscribe(event):
     return {"channel_ids": channel_ids}
 
 
-def change_subscription(event, mode):
+def change_subscription(event: dict, mode: str) -> dict[str, list[str]]:
     channel_id = event.get("channel_id")
     if not isinstance(channel_id, str) or not CHANNEL_ID_PATTERN.fullmatch(channel_id):
         raise ValueError(f"invalid channel_id {channel_id!r}")
@@ -104,9 +104,9 @@ def change_subscription(event, mode):
     return {"channel_ids": channel_ids}
 
 
-def subscribe(event):
+def subscribe(event: dict) -> dict[str, list[str]]:
     return change_subscription(event, "subscribe")
 
 
-def unsubscribe(event):
+def unsubscribe(event: dict) -> dict[str, list[str]]:
     return change_subscription(event, "unsubscribe")

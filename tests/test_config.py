@@ -16,7 +16,7 @@ ENV = {
 }
 
 
-def test_defaults():
+def test_defaults() -> None:
     config = load_config(ENV, SSM)
     assert config.hub_secret == HUB_SECRET
     assert HUB_SECRET not in repr(config)
@@ -39,13 +39,13 @@ def test_defaults():
         {"LOG_LEVEL": "LOUD"},
     ],
 )
-def test_invalid_env_fails(overrides):
+def test_invalid_env_fails(overrides: dict[str, str]) -> None:
     with pytest.raises(ConfigError):
         load_config(ENV | overrides, SSM)
 
 
 @pytest.mark.parametrize("secret", [" " * 200])
-def test_invalid_secret_fails(secret):
+def test_invalid_secret_fails(secret: str) -> None:
     SSM.put_parameter(
         Name="/test/bad-secret", Value=secret, Type="SecureString", Overwrite=True
     )

@@ -16,19 +16,19 @@ ACTIONS = {
 }
 
 
-def lambda_handler(event, context):
+def lambda_handler(event: object, context: object) -> dict:
     if not isinstance(event, dict):
         logger.error("Unsupported event type %s", type(event).__name__)
         raise TypeError("event must be a JSON object")
 
     if "requestContext" in event:
-        method = (event["requestContext"].get("http") or {}).get("method")
+        method = (event["requestContext"].get("http") or {}).get("method", "")
         if handler := HTTP_HANDLERS.get(method):
             return handler(event)
         logger.error("Unsupported method %r", method)
         return notifications.response(400)
 
-    action = event.get("action")
+    action = event.get("action", "")
     if handler := ACTIONS.get(action):
         return handler(event)
     logger.error("Unknown action %r", action)

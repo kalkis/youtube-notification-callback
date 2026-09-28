@@ -1,10 +1,12 @@
 import logging
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 import boto3
+from botocore.client import BaseClient
 
 TOPIC_ARN_PATTERN = re.compile(
     r"arn:aws[a-z-]*:sns:[a-z0-9-]+:\d{12}:[A-Za-z0-9_-]{1,256}"
@@ -20,7 +22,7 @@ class ConfigError(Exception):
     pass
 
 
-def https_url(url) -> bool:
+def https_url(url: str) -> bool:
     parsed = urlparse(url)
     return parsed.scheme == "https" and bool(parsed.netloc)
 
@@ -36,8 +38,10 @@ class Config:
     log_level: str
 
 
-def load_config(env=os.environ, ssm=None) -> Config:
-    def required(name):
+def load_config(
+    env: Mapping[str, str] = os.environ, ssm: BaseClient | None = None
+) -> Config:
+    def required(name: str) -> str:
         if not (value := env.get(name, "").strip()):
             raise ConfigError(f"{name} is required")
         return value

@@ -22,12 +22,12 @@ logger = logging.getLogger()
 SNS = boto3.client("sns")
 
 
-def raw_body(event) -> bytes:
+def raw_body(event: dict) -> bytes:
     body = event.get("body") or ""
     return base64.b64decode(body) if event.get("isBase64Encoded") else body.encode()
 
 
-def response(status, body=""):
+def response(status: int, body: str = "") -> dict:
     return {
         "statusCode": status,
         "headers": {"Content-Type": "text/plain"},
@@ -35,7 +35,7 @@ def response(status, body=""):
     }
 
 
-def verify_subscription(event):
+def verify_subscription(event: dict) -> dict:
     params = dict(parse_qsl(event.get("rawQueryString", "")))
     mode = params.get("hub.mode")
     match = FEED_URL_PATTERN.fullmatch(params.get("hub.topic", ""))
@@ -73,7 +73,7 @@ def parse_feed(body: bytes) -> dict:
     return doc["feed"] or {}
 
 
-def field(node, *path) -> str | None:
+def field(node: object, *path: str) -> str | None:
     for key in path:
         node = node.get(key) if isinstance(node, dict) else None
     return node if isinstance(node, str) else None
@@ -127,11 +127,11 @@ def build_messages(feed: dict, channel_ids: list[str]) -> list[dict]:
     return messages
 
 
-def write_to_topic(message):
+def write_to_topic(message: dict) -> None:
     SNS.publish(TopicArn=CONFIG.topic_arn, Message=json.dumps(message))
 
 
-def notification(event):
+def notification(event: dict) -> dict:
     body = raw_body(event)
     signature = (event.get("headers") or {}).get("x-hub-signature")
     if not valid_signature(body, signature):

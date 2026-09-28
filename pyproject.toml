@@ -13,12 +13,18 @@ dependencies = [
 dev = [
     "boto3>=1.43.102",
     "moto[sns,ssm]>=5.2.3",
+    "mypy>=2.3.1",
     "pytest>=9.1.1",
     "ruff>=0.16.9",
+    "types-xmltodict>=1.0.1.20260518",
 ]
 
 [tool.uv]
 package = false
+
+[[tool.mypy.overrides]]
+module = ["boto3", "botocore.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
