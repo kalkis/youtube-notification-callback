@@ -1,4 +1,4 @@
-FROM public.ecr.aws/lambda/python:3.13
+FROM public.ecr.aws/lambda/python:3.14
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.19 /uv /bin/uv
 
